@@ -94,8 +94,8 @@ struct PranaKitTests {
     @Test func winterAndHeaterAreIndependent() throws {
         var state = try JSONDecoder().decode(PranaState.self, from: Data(statePayload.utf8))
         #expect(state.conflictingModes(for: .winter).isEmpty)
-        state.setSwitch(.winter, true)
         state.setSwitch(.heater, true)
+        state.setSwitch(.winter, true)
         #expect(state.winter && state.heater && state.night)
     }
 
@@ -239,5 +239,47 @@ struct PranaKitTests {
                      SavedUnit(name: "Loft", host: "loft.local")]
         let decoded = try JSONDecoder().decode([SavedUnit].self, from: JSONEncoder().encode(units))
         #expect(decoded == units)
+    }
+
+    // Office unit, 2026-11-19: sending each switch the value it already had
+    // flipped auto_plus and winter, and nothing else.
+    @Test func onlyAutoPlusAndWinterToggle() {
+        #expect(PranaSwitch.allCases.filter(\.isToggle) == [.autoPlus, .winter])
+    }
+
+    @Test func autoBlocksLinking() throws {
+        var state = try JSONDecoder().decode(PranaState.self, from: Data(statePayload.utf8))
+        state.setSwitch(.auto, true)
+        #expect(state.linkBlockedBy == .auto)
+    }
+
+    // Any setSpeed ended Auto, Auto+ and Boost; Night came back only with both
+    // fans at level 1.
+    @Test func speedChangeEndsModes() throws {
+        var state = try JSONDecoder().decode(PranaState.self, from: Data(statePayload.utf8))
+        state.setSwitch(.autoPlus, true)
+        state.setLevel(3, fan: .supply)
+        #expect(!state.autoPlus && !state.auto && !state.boost)
+        #expect(!state.night) // supply 3, extract 1
+        state.setLevel(1, fan: .supply)
+        #expect(state.night)
+        #expect(state.activeFanMode == .night)
+    }
+
+    @Test func boostLinksFansAtFullSpeed() throws {
+        var state = try JSONDecoder().decode(PranaState.self, from: Data(statePayload.utf8))
+        state.setSwitch(.boost, true)
+        #expect(state.bound)
+        #expect(state.bounded.speed == 6 && state.supply.speed == 6 && state.extract.speed == 6)
+        state.setLevel(2, fan: .bounded)
+        #expect(!state.boost && state.bound) // stays linked after Boost
+    }
+
+    @Test func heaterFollowsWinter() throws {
+        var state = try JSONDecoder().decode(PranaState.self, from: Data(statePayload.utf8))
+        state.setSwitch(.winter, true)
+        #expect(state.heater)
+        state.setSwitch(.winter, false)
+        #expect(!state.heater)
     }
 }

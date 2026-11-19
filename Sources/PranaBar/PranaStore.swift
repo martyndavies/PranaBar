@@ -62,6 +62,12 @@ final class PranaStore {
     /// older value may carry the state from before the command, so it's discarded.
     private var commandEpoch = 0
     private var commandsInFlight = 0
+    /// The last command sent. Each command waits for the one before, so a double
+    /// click can't send two toggles that both read the same state.
+    private var lastCommand: Task<Void, Never>?
+    /// What the unit was doing before the app turned Boost on, to go back to when
+    /// it's turned off. Nil if Boost was started elsewhere.
+    private var beforeBoost: (level: Int, mode: PranaSwitch?)?
 
     init(host: String) {
         self.host = host
@@ -150,7 +156,9 @@ final class PranaStore {
         guard let client else { return }
         commandEpoch += 1
         commandsInFlight += 1
-        Task {
+        let previous = lastCommand
+        lastCommand = Task {
+            await previous?.value
             var sent = false
             do {
                 try await command(client)
@@ -170,7 +178,8 @@ final class PranaStore {
 
     func setLevel(_ level: Int, fan: FanType) {
         let target: FanType = (state?.bound ?? true) ? .bounded : fan
-        perform({ $0.setFan(target) { $0.speed = level } }) {
+        beforeBoost = nil // a speed change ends Boost
+        perform({ $0.setLevel(level, fan: target) }) {
             try await $0.setSpeed(level: level, fan: target)
         }
     }
@@ -186,9 +195,18 @@ final class PranaStore {
     }
 
     /// Turning a fan mode on switches the other fan modes off first, so the
-    /// chosen mode is the last command the unit receives.
+    /// chosen mode is the last command the unit receives. Auto+ and Winter toggle
+    /// whatever value is sent, so the unit is read fresh and they're only sent when
+    /// it isn't already in the target state.
     func set(_ sw: PranaSwitch, _ on: Bool) {
-        let offs = on ? (state?.conflictingModes(for: sw) ?? []) : []
+        if let s = state, s.boost, (sw == .boost && !on) || (on && sw.isFanMode && sw != .boost) {
+            leaveBoost(for: sw == .boost ? nil : sw)
+            return
+        }
+        if sw == .boost, on, let s = state {
+            let mode = s.activeFanMode
+            beforeBoost = (s.primaryFan.speed, mode == .auto || mode == .autoPlus ? mode : nil)
+        }
         perform({ $0.setSwitch(sw, on) }, ignored: { state in
             guard !state.applied(sw, on) else { return nil }
             if sw == .bound {
@@ -196,10 +214,45 @@ final class PranaStore {
             }
             return "The unit didn't turn \(sw.title) \(on ? "on" : "off")"
         }) { client in
-            for other in offs {
-                try await client.setSwitch(other, false)
+            let fresh = try await client.state()
+            if on {
+                for other in fresh.conflictingModes(for: sw) {
+                    if other == .boost {
+                        // Ignored by the unit; a speed change ends Boost.
+                        try await client.setSpeed(level: 1, fan: .bounded)
+                    } else {
+                        try await client.setSwitch(other, false)
+                    }
+                }
             }
-            try await client.setSwitch(sw, on)
+            if !sw.isToggle || fresh[keyPath: sw.keyPath] != on {
+                try await client.setSwitch(sw, on)
+            }
+        }
+    }
+
+    /// The unit ignores boost=false, but any speed change ends Boost. So go back to
+    /// the level from before Boost (or level 1, Night, if Boost was started
+    /// elsewhere), then turn on `mode`, or the Auto mode that was on before.
+    private func leaveBoost(for mode: PranaSwitch?) {
+        let previous = beforeBoost
+        beforeBoost = nil
+        let resume = mode ?? previous?.mode
+        let level = resume == .night ? 1 : (previous?.level ?? 1)
+        perform({ s in
+            s.setLevel(level, fan: .bounded)
+            if let resume { s.setSwitch(resume, true) }
+        }, ignored: { state in
+            if state.boost { return "The unit didn't leave Boost" }
+            if let resume, !state.applied(resume, true) { return "The unit didn't turn \(resume.title) on" }
+            return nil
+        }) { client in
+            try await client.setSpeed(level: level, fan: .bounded)
+            guard let resume, resume != .night else { return }
+            let fresh = try await client.state()
+            if !resume.isToggle || !fresh[keyPath: resume.keyPath] {
+                try await client.setSwitch(resume, true)
+            }
         }
     }
 

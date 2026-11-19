@@ -70,7 +70,7 @@ Searches are logged under category `discovery`: `log stream --predicate 'categor
 - `scripts/spike.sh <host> [--write]`: curl checks against a unit's API. Read-only unless you pass `--write`, which changes the unit's settings.
 - `scripts/fake-units.py`: fake units, for trying more than one without owning them.
   - `sudo scripts/fake-units.py Loft Bedroom` puts each on its own loopback address (127.0.0.11 onwards), serves the API on port 80 there and announces it over Bonjour like a real unit. PranaBar finds them with its normal code.
-  - It copies the real unit's known quirks: writes ×10, the brightness encoding, "ok" to everything, and Auto+ blocking the link.
+  - It copies the real unit's known quirks from the notes below: the write encodings, "ok" to ignored commands, the toggle switches, Boost and the link rules.
   - It needs root for the addresses and port 80. Ctrl-C removes the addresses. Remove the fake units in Settings afterwards, or they'll show as offline.
 
 ## Prana local API
@@ -99,14 +99,14 @@ Plain HTTP on port 80, no auth.
   - `heater`, `auto`, `boost` and `bound` honour `value`.
   - `night=false` is ignored.
 
-  So a toggle switch must only be sent when the fresh state differs from the target, or a stale state or a double click flips it the wrong way.
+  So a toggle switch must only be sent when the fresh state differs from the target, or a stale state or a double click flips it the wrong way. `PranaStore` sends commands one at a time and reads the unit just before each one, sending toggles only when needed (`PranaSwitch.isToggle`).
 - Winter brings the heater with it: turning Winter on also turned Heater on, and turning it off turned Heater off.
 - Any `setSpeed` ends Auto, Auto+ and Boost; Night returns if the level is 1.
 - Turning Auto on turns Auto+ off, and `auto=false` while Auto+ is on also turns Auto+ off. `night=false` and `boost=false` leave Auto+ on.
-- Boost runs both fans at level 6 and links them (`bound` becomes true). `boost=false` is ignored (sent twice); a `setSpeed` ends Boost, and the fans stay linked.
+- Boost runs both fans at level 6 and links them (`bound` becomes true). `boost=false` is ignored (sent twice); a `setSpeed` ends Boost, and the fans stay linked. So PranaBar turns Boost off with a speed change: back to the level from before Boost, then Auto or Auto+ if one was on, or level 1 if Boost was started elsewhere. Picking another mode during Boost does the same, then turns that mode on.
 - Auto blocks linking as Auto+ does: bound=true is answered "ok" but ignored.
 - `setSpeedIsOn` with `bounded` turns the whole unit off even with the fans unlinked, and both speeds read 0 while off. Turning `bounded` back on brings the unit back linked. `setSpeedIsOn` for one fan unlinks them.
-- Auto+ and linked fans don't mix. `setSwitch` bound=true is answered `{"result":"ok"}` but ignored while Auto+ is on (tried twice, read back at 0.2–8 s); with Auto+ off it links at once. Turning Auto+ on unlinks the fans. PranaBar greys out the link button while Auto+ is on (`PranaState.linkBlockedBy`); Auto blocks it too (see above), which the app doesn't handle yet.
+- Auto+ and linked fans don't mix. `setSwitch` bound=true is answered `{"result":"ok"}` but ignored while Auto+ is on (tried twice, read back at 0.2–8 s); with Auto+ off it links at once. Turning Auto+ on unlinks the fans. PranaBar greys out the link button while Auto or Auto+ is on (`PranaState.linkBlockedBy`).
 - More generally, "ok" proves nothing, so PranaBar re-reads after each switch command and shows "The unit didn't …" in the popover footer when the value didn't change (`PranaState.applied`). Night is exempt because it follows the speed.
 - The unit occasionally drops a request, so `PranaClient.state()` retries once.
 - Discovery: each unit advertises `_prana._tcp` over Bonjour. The instance name is the `manufactureId` from `/info` (`88F155142EEC`), the host is `<that>.local`, and the TXT record has `label=` (space-padded) and `maxSpeed=`. The advertised port, 12345, is closed; the API stays on port 80. `UnitBrowser` resolves the host to IPv4, because the unit doesn't answer over IPv6 and a client trying IPv6 first can use up the 4 s timeout.

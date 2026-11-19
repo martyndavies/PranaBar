@@ -13,10 +13,12 @@ listens on). So PranaBar finds and talks to them with its normal code.
 Root is needed for the loopback aliases and port 80. Ctrl-C removes everything.
 
 State is in memory and resets when the script stops. Writes behave like the
-office unit (fw 49) where we know how it behaves: speed is written x10, brightness
-as 0/1/2/4/8/16/32, every command answers {"result":"ok"}, bound=true is ignored
-while Auto+ is on, and turning Auto+ on unlinks the fans. Readings drift a little
-so the popover has something to show.
+office unit (Prana 150, fw 49; see the README's API notes): speed is written x10,
+brightness as 0/1/2/4/8/16/32, commands answer {"result":"ok"} even when ignored
+(malformed ones get 400), auto_plus and winter toggle whatever value says,
+boost=false and night=false are ignored, any speed change ends Auto/Auto+/Boost,
+Boost links the fans at 6, Auto and Auto+ block linking, Heater follows Winter.
+Readings drift a little so the popover has something to show.
 """
 
 import hashlib
@@ -75,29 +77,63 @@ class FakeUnit:
             s["humidity"] = max(20, min(80, s["humidity"] + random.choice([-1, 0, 0, 0, 1])))
             return json.loads(json.dumps(s))
 
+    def _end_modes(self):
+        s = self.state
+        s["auto"] = s["auto_plus"] = s["boost"] = False
+        s["night"] = (s["bounded"]["speed"] == 1) if s["bound"] else (s["supply"]["speed"] == 1 and s["extract"]["speed"] == 1)
+
     def command(self, path, body):
         with self.lock:
             s = self.state
             if path == "/setSpeed":
-                level = max(1, min(6, int(body["speed"]) // 10))
+                level = int(body["speed"]) // 10
+                if not 1 <= level <= 6 or body["fanType"] not in ("bounded", "supply", "extract"):
+                    raise ValueError("bad speed")
                 fans = ["bounded", "supply", "extract"] if body["fanType"] == "bounded" else [body["fanType"]]
                 for fan in fans:
                     s[fan]["speed"] = level
+                self._end_modes()  # any speed change ends Auto, Auto+ and Boost
             elif path == "/setSpeedIsOn":
-                fans = ["bounded", "supply", "extract"] if body["fanType"] == "bounded" else [body["fanType"]]
+                on = bool(body["value"])
+                if body["fanType"] == "bounded":
+                    fans = ["bounded", "supply", "extract"]
+                    s["bound"] = True  # bounded power links the fans
+                else:
+                    fans = [body["fanType"]]
+                    s["bound"] = False  # a single fan's power unlinks them
                 for fan in fans:
-                    s[fan]["is_on"] = bool(body["value"])
+                    s[fan]["is_on"] = on
             elif path == "/setSwitch":
                 key, value = body["switchType"], bool(body["value"])
-                if key == "bound" and value and s["auto_plus"]:
+                if key in ("auto_plus", "winter"):
+                    value = not s[key]  # these toggle, whatever value says
+                if key == "bound" and value and (s["auto_plus"] or s["auto"]):
                     pass  # ignored, but still "ok"
-                elif key in s:
+                elif key == "night" and not value:
+                    pass  # ignored
+                elif key == "boost" and not value:
+                    pass  # ignored; a speed change ends Boost
+                elif key in ("bound", "heater", "night", "boost", "auto", "auto_plus", "winter"):
                     s[key] = value
                     if key == "auto_plus" and value:
                         s["bound"] = False
+                        s["auto"] = s["boost"] = False
+                    if key == "auto":
+                        s["auto_plus"] = False  # Auto on ends Auto+, and so does auto=false
+                        if value:
+                            s["boost"] = False
+                    if key == "boost" and value:
+                        s["bound"] = True
+                        for fan in ("bounded", "supply", "extract"):
+                            s[fan]["speed"] = 6
+                        s["auto"] = s["auto_plus"] = s["night"] = False
+                    if key == "winter":
+                        s["heater"] = value
+                else:
+                    raise ValueError("bad switch")
             elif path == "/setBrightness":
                 raw = int(body["brightness"])
-                s["brightness"] = BRIGHTNESS_RAW.index(raw) if raw in BRIGHTNESS_RAW else 3
+                s["brightness"] = BRIGHTNESS_RAW.index(raw) if raw in BRIGHTNESS_RAW else s["brightness"]
             else:
                 return False
             return True

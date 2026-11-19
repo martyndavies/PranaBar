@@ -37,6 +37,11 @@ public enum PranaSwitch: String, Sendable, CaseIterable {
 
     public var isFanMode: Bool { Self.fanModes.contains(self) }
 
+    /// Switches the unit flips on every `setSwitch`, ignoring `value` (Prana 150,
+    /// fw 49: auto_plus=false while off turned it on). Only send these when the
+    /// unit's current state differs from the target.
+    public var isToggle: Bool { self == .autoPlus || self == .winter }
+
     public var keyPath: WritableKeyPath<PranaState, Bool> {
         switch self {
         case .bound: \.bound
@@ -205,24 +210,48 @@ public struct PranaState: Codable, Sendable, Equatable {
     }
 
     /// The mode that stops the fans being linked, if any. On a Prana 150 (fw 49)
-    /// bound=true is ignored while Auto+ is on, and turning Auto+ on unlinks them.
-    /// Auto hasn't been tested, so it isn't listed.
+    /// bound=true is ignored while Auto or Auto+ is on, and turning Auto+ on
+    /// unlinks them.
     public var linkBlockedBy: PranaSwitch? {
-        autoPlus ? .autoPlus : nil
+        if autoPlus { return .autoPlus }
+        if auto { return .auto }
+        return nil
     }
 
-    /// Sets a switch, mirroring what the unit does: turning a fan mode on turns
-    /// the other fan modes off, and turning Auto+ on unlinks the fans.
+    /// Sets a switch, mirroring what the unit does (Prana 150, fw 49): turning a
+    /// fan mode on turns the other fan modes off, Auto+ unlinks the fans, Boost
+    /// links them at full speed, and Heater follows Winter.
     public mutating func setSwitch(_ sw: PranaSwitch, _ on: Bool) {
         if on {
             for other in conflictingModes(for: sw) {
                 self[keyPath: other.keyPath] = false
             }
-            if sw == .autoPlus {
+            switch sw {
+            case .autoPlus:
                 bound = false
+            case .boost:
+                bound = true
+                let top = bounded.maxLevel
+                setFan(.bounded) { $0.speed = top }
+            default:
+                break
             }
         }
+        if sw == .winter {
+            heater = on
+        }
         self[keyPath: sw.keyPath] = on
+    }
+
+    /// Sets a fan level, mirroring the unit: any speed change ends Auto, Auto+
+    /// and Boost, and Night comes back when the fans are at level 1 (supply 3 with
+    /// extract 1 showed no Night).
+    public mutating func setLevel(_ level: Int, fan: FanType) {
+        setFan(fan) { $0.speed = level }
+        auto = false
+        autoPlus = false
+        boost = false
+        night = bound ? bounded.speed == 1 : (supply.speed == 1 && extract.speed == 1)
     }
 
     public mutating func setFan(_ type: FanType, _ update: (inout FanState) -> Void) {
