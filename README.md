@@ -86,27 +86,30 @@ Plain HTTP on port 80, no auth.
 | `/setSwitch` | POST | `{"switchType": "bound"\|"heater"\|"night"\|"boost"\|"auto"\|"auto_plus"\|"winter", "value": bool}` |
 | `/setBrightness` | POST | `{"brightness": 0\|1\|2\|4\|8\|16\|32}` |
 
-- Commands answer HTTP 200 with `{"result":"ok"}` (served as `text/html`). The client treats any other `result` as a rejection.
+- Commands answer HTTP 200 with `{"result":"ok"}` (served as `text/html`), including commands the unit then ignores. A malformed command (unknown switch or fan type, speed out of range, missing fields) gets HTTP 400 instead, and an unknown path 404. An invalid brightness value (5) still got "ok". The client treats any `result` other than "ok" as a rejection, though none has been seen.
 - Speed reads back as a level (1–6) but is written as level × 10.
 - Brightness reads back as a level (0–6) but is written as the value at that position in `[0, 1, 2, 4, 8, 16, 32]`: writing 4 reads back 3, writing 8 reads back 4.
-- The unit doesn't keep the speed modes exclusive: it reported Night and Auto+ both on. PranaBar treats Night, Boost, Auto and Auto+ as one group and switches the others off when you pick one. Winter and Heater are independent.
+- The unit doesn't keep the speed modes fully exclusive: it reports Night alongside Auto+ or Auto at level 1. PranaBar treats Night, Boost, Auto and Auto+ as one group and switches the others off when you pick one. Winter and Heater are independent.
 - Night appears to follow the fan speed rather than the switch: setting supply to level 2 cleared it, and setting it back to 1 brought it back. `setSwitch` night=false is answered `{"result":"ok"}` but ignored (seen twice, with Auto+ on and off). So the popover highlights only one speed mode, ranked Boost, Auto+, Auto, Night (`PranaState.activeFanMode`).
 - `air_pressure` looks like mmHg (728–730 here). The popover shows it as a Low / Normal / High band plus a 3-hour trend, with the hPa figure only in the hover hint. The trend (`PressureHistory`) is averaged over 15 minutes at each end because the unit only reports whole mmHg. The history lives in memory, so the trend takes an hour to appear after launch. Set the unit's altitude in Settings and the reading is corrected to sea level (`Pressure.seaLevel`, standard barometric formula using the outside temperature), so it matches forecasts. At 0 m it shows the raw reading, which is lower than the forecast by about 1 hPa per 8 m of altitude. The trend is worked out on the raw readings; the correction barely changes it. The band (Low < 1000 hPa, Normal, High > 1025 hPa, `PressureLevel`) needs an altitude; without one the row offers "Set altitude…" instead, because the raw reading would always look low.
 - Temperatures are tenths of °C. The 150 sends `outside_temperature_2` rather than `outside_temperature`.
 - When `bound` is true use `fanType: "bounded"`; otherwise set supply and extract separately.
-- Auto+ and linked fans don't mix. `setSwitch` bound=true is answered `{"result":"ok"}` but ignored while Auto+ is on (tried twice, read back at 0.2–8 s); with Auto+ off it links at once. Turning Auto+ on unlinks the fans. PranaBar greys out the link button while Auto+ is on (`PranaState.linkBlockedBy`).
+- `setSwitch` doesn't treat `value` the same way for every switch (tested 2026-11-19 by sending each switch the value it already had):
+  - `auto_plus` and `winter` toggle and ignore `value`: `auto_plus=false` while it's off turns it on.
+  - `heater`, `auto`, `boost` and `bound` honour `value`.
+  - `night=false` is ignored.
+
+  So a toggle switch must only be sent when the fresh state differs from the target, or a stale state or a double click flips it the wrong way.
+- Winter brings the heater with it: turning Winter on also turned Heater on, and turning it off turned Heater off.
+- Any `setSpeed` ends Auto, Auto+ and Boost; Night returns if the level is 1.
+- Turning Auto on turns Auto+ off, and `auto=false` while Auto+ is on also turns Auto+ off. `night=false` and `boost=false` leave Auto+ on.
+- Boost runs both fans at level 6 and links them (`bound` becomes true). `boost=false` is ignored (sent twice); a `setSpeed` ends Boost, and the fans stay linked.
+- Auto blocks linking as Auto+ does: bound=true is answered "ok" but ignored.
+- `setSpeedIsOn` with `bounded` turns the whole unit off even with the fans unlinked, and both speeds read 0 while off. Turning `bounded` back on brings the unit back linked. `setSpeedIsOn` for one fan unlinks them.
+- Auto+ and linked fans don't mix. `setSwitch` bound=true is answered `{"result":"ok"}` but ignored while Auto+ is on (tried twice, read back at 0.2–8 s); with Auto+ off it links at once. Turning Auto+ on unlinks the fans. PranaBar greys out the link button while Auto+ is on (`PranaState.linkBlockedBy`); Auto blocks it too (see above), which the app doesn't handle yet.
 - More generally, "ok" proves nothing, so PranaBar re-reads after each switch command and shows "The unit didn't …" in the popover footer when the value didn't change (`PranaState.applied`). Night is exempt because it follows the speed.
 - The unit occasionally drops a request, so `PranaClient.state()` retries once.
 - Discovery: each unit advertises `_prana._tcp` over Bonjour. The instance name is the `manufactureId` from `/info` (`88F155142EEC`), the host is `<that>.local`, and the TXT record has `label=` (space-padded) and `maxSpeed=`. The advertised port, 12345, is closed; the API stays on port 80. `UnitBrowser` resolves the host to IPv4, because the unit doesn't answer over IPv6 and a client trying IPv6 first can use up the 4 s timeout.
-
-## Still to confirm (run `scripts/spike.sh <host> --write`)
-
-- Whether `setSpeed` works while Auto is on, or knocks it out of Auto.
-- What speed `/getState` reports during Boost.
-- Whether `setSpeedIsOn` with `bounded` powers off the whole unit when fans are unlinked.
-- What the unit does when another mode is switched off while Auto+ is on (does Auto+ stay on?). The mode-group logic assumes it does.
-- Whether Auto (not Auto+) also blocks linking.
-- What a rejected command returns, if anything other than `{"result":"ok"}`.
 
 ## Ideas
 
