@@ -29,7 +29,7 @@ The unit answers "ok" even to commands it ignores, so PranaBar re-reads it after
 ## Build your own
 
 ```sh
-git clone <this repo>
+git clone https://github.com/martyndavies/PranaBar.git
 cd PranaBar
 scripts/test.sh                       # run the tests
 scripts/bundle.sh                     # build build/PranaBar.app
