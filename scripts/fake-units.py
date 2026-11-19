@@ -17,7 +17,8 @@ office unit (Prana 150, fw 49; see the API notes in DOCUMENTATION.md): speed is 
 brightness as 0/1/2/4/8/16/32, commands answer {"result":"ok"} even when ignored
 (malformed ones get 400), auto_plus and winter toggle whatever value says,
 boost=false and night=false are ignored, any speed change ends Auto/Auto+/Boost,
-Boost links the fans at 6, Auto and Auto+ block linking, Heater follows Winter.
+Boost links the fans at 6, Auto and Auto+ block linking and power-off, Heater
+follows Winter.
 Readings drift a little so the popover has something to show.
 """
 
@@ -95,6 +96,18 @@ class FakeUnit:
                 self._end_modes()  # any speed change ends Auto, Auto+ and Boost
             elif path == "/setSpeedIsOn":
                 on = bool(body["value"])
+                if body["fanType"] not in ("bounded", "supply", "extract"):
+                    raise ValueError("bad fan")
+                if s["auto"] or s["auto_plus"]:
+                    # Auto and Auto+ block power: still "ok". bounded off flips only
+                    # its own reading, and the unit keeps running.
+                    if body["fanType"] == "bounded" and not on:
+                        s["bounded"]["is_on"] = False
+                    return True
+                if body["fanType"] == "bounded" and not on:
+                    s["night"] = s["boost"] = False  # modes read false while off
+                elif body["fanType"] == "bounded" and on:
+                    s["night"] = s["bounded"]["speed"] == 1  # back without Auto/Auto+
                 if body["fanType"] == "bounded":
                     fans = ["bounded", "supply", "extract"]
                     s["bound"] = True  # bounded power links the fans

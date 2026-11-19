@@ -242,6 +242,13 @@ So a toggle switch must only be sent when the fresh state differs from the targe
 - **Auto and Auto+ block linking.** bound=true is answered "ok" but ignored (tried twice under Auto+, read back at 0.2–8 s); with both off it links at once. Turning Auto+ on unlinks the fans. PranaBar greys out the link button under either (`PranaState.linkBlockedBy`).
 - **`setSpeedIsOn` with `bounded`** turns the whole unit off even with the fans unlinked, and both speeds read 0 while off. Turning `bounded` back on brings the unit back linked.
 - **`setSpeedIsOn` for one fan** unlinks them.
+- **Auto and Auto+ block turning the unit off** (tested 2026-11-19 with each mode; under Auto+ watched for 20 s and confirmed on the unit and the phone app):
+  - Supply off then extract off: both answered "ok", and nothing changed.
+  - `bounded` off: `bounded.is_on` read false, but supply and extract stayed on at level 1, the mode stayed on, and the unit kept running. `bounded` on was then ignored too, until the mode went off.
+  - Mode off first (auto_plus toggled, or auto=false), then `bounded` off: the whole unit turned off and stayed off.
+  - Turning `bounded` back on brought the unit back linked at level 1 with Night, without the mode.
+
+  So PranaBar's power button reads the unit fresh and, if Auto or Auto+ is on, sends auto=false (which ends both and honours its value) and then `bounded` off. It remembers the mode and turns it back on with the unit. Both steps are checked against the re-read state ("The unit didn't turn off"). Tested end to end on the unit with each mode.
 
 ### Pressure
 

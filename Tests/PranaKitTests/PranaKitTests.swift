@@ -282,4 +282,35 @@ struct PranaKitTests {
         state.setSwitch(.winter, false)
         #expect(!state.heater)
     }
+
+    // On a Prana 150 (fw 49) power-off was ignored under Auto and Auto+, sent per
+    // fan or as bounded, and worked once the mode was off.
+    @Test func autoModesBlockPowerOff() throws {
+        var state = try JSONDecoder().decode(PranaState.self, from: Data(statePayload.utf8))
+        #expect(state.powerOffBlockedBy == nil)
+        state.setSwitch(.autoPlus, true)
+        #expect(state.powerOffBlockedBy == .autoPlus)
+        state.setSwitch(.auto, true)
+        #expect(state.powerOffBlockedBy == .auto)
+    }
+
+    // bounded off turned the whole unit off with the fans unlinked, read back
+    // linked with no modes, and came back on linked.
+    @Test func boundedPowerLinksAndClearsModes() throws {
+        var state = try JSONDecoder().decode(PranaState.self, from: Data(statePayload.utf8))
+        state.setSwitch(.autoPlus, true)
+        state.setSwitch(.autoPlus, false)
+        #expect(!state.bound)
+        state.setPower(false, fan: .bounded)
+        #expect(!state.isOn && state.bound && state.activeFanMode == nil)
+        state.setPower(true, fan: .bounded)
+        #expect(state.isOn && state.bound)
+    }
+
+    @Test func singleFanPowerUnlinks() throws {
+        var state = try JSONDecoder().decode(PranaState.self, from: Data(statePayload.utf8))
+        state.bound = true
+        state.setPower(false, fan: .supply)
+        #expect(!state.bound && !state.supply.isOn && state.extract.isOn && state.isOn)
+    }
 }

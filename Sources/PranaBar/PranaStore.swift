@@ -68,6 +68,9 @@ final class PranaStore {
     /// What the unit was doing before the app turned Boost on, to go back to when
     /// it's turned off. Nil if Boost was started elsewhere.
     private var beforeBoost: (level: Int, mode: PranaSwitch?)?
+    /// The Auto mode that was on when the app turned the unit off, to turn back
+    /// on with it.
+    private var beforeOff: PranaSwitch?
 
     init(host: String) {
         self.host = host
@@ -185,11 +188,59 @@ final class PranaStore {
     }
 
     func setPower(_ on: Bool) {
-        let bound = state?.bound ?? true
-        let fans: [FanType] = bound ? [.bounded] : [.supply, .extract]
-        perform({ s in fans.forEach { s.setFan($0) { $0.isOn = on } } }) { client in
+        on ? powerOn() : powerOff()
+    }
+
+    /// Auto and Auto+ block power-off: the unit answers "ok" and keeps running.
+    /// So turn the mode off first, then the whole unit with `bounded`. auto=false
+    /// is used for both, since it also ends Auto+ and, unlike auto_plus, honours
+    /// its value. The mode is remembered, because the unit comes back without it.
+    private func powerOff() {
+        beforeOff = state?.powerOffBlockedBy
+        beforeBoost = nil
+        perform({ s in
+            if s.powerOffBlockedBy != nil || s.bound {
+                s.setPower(false, fan: .bounded)
+            } else {
+                s.setPower(false, fan: .supply)
+                s.setPower(false, fan: .extract)
+            }
+        }, ignored: { $0.isOn ? "The unit didn't turn off" : nil }) { client in
+            let fresh = try await client.state()
+            if fresh.powerOffBlockedBy != nil {
+                try await client.setSwitch(.auto, false)
+                try await client.setPower(false, fan: .bounded)
+            } else if fresh.bound {
+                try await client.setPower(false, fan: .bounded)
+            } else {
+                // Unlinked fans stay unlinked this way when the unit comes back.
+                try await client.setPower(false, fan: .supply)
+                try await client.setPower(false, fan: .extract)
+            }
+        }
+    }
+
+    /// Turns the unit back on, then the Auto mode that was on when the app turned
+    /// it off.
+    private func powerOn() {
+        let resume = beforeOff
+        beforeOff = nil
+        let fans: [FanType] = (state?.bound ?? true) ? [.bounded] : [.supply, .extract]
+        perform({ s in
+            fans.forEach { s.setPower(true, fan: $0) }
+            if let resume { s.setSwitch(resume, true) }
+        }, ignored: { state in
+            if !state.isOn { return "The unit didn't turn on" }
+            if let resume, !state.applied(resume, true) { return "The unit didn't turn \(resume.title) back on" }
+            return nil
+        }) { client in
             for fan in fans {
-                try await client.setPower(on, fan: fan)
+                try await client.setPower(true, fan: fan)
+            }
+            guard let resume else { return }
+            let fresh = try await client.state()
+            if !resume.isToggle || !fresh[keyPath: resume.keyPath] {
+                try await client.setSwitch(resume, true)
             }
         }
     }

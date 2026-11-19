@@ -218,6 +218,25 @@ public struct PranaState: Codable, Sendable, Equatable {
         return nil
     }
 
+    /// The mode that stops the unit turning off, if any. On a Prana 150 (fw 49)
+    /// power-off is answered "ok" but ignored while Auto or Auto+ is on, whether
+    /// sent per fan or as `bounded`.
+    public var powerOffBlockedBy: PranaSwitch? { linkBlockedBy }
+
+    /// Turns fans on or off, mirroring the unit: `bounded` powers the whole unit
+    /// and links the fans (even if they were unlinked), one fan's power unlinks
+    /// them, and the fan modes read false while the unit is off.
+    public mutating func setPower(_ on: Bool, fan: FanType) {
+        setFan(fan) { $0.isOn = on }
+        bound = fan == .bounded
+        if !on, fan == .bounded {
+            auto = false
+            autoPlus = false
+            boost = false
+            night = false
+        }
+    }
+
     /// Sets a switch, mirroring what the unit does (Prana 150, fw 49): turning a
     /// fan mode on turns the other fan modes off, Auto+ unlinks the fans, Boost
     /// links them at full speed, and Heater follows Winter.
