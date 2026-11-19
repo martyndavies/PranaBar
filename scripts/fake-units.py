@@ -13,7 +13,7 @@ listens on). So PranaBar finds and talks to them with its normal code.
 Root is needed for the loopback aliases and port 80. Ctrl-C removes everything.
 
 State is in memory and resets when the script stops. Writes behave like the
-office unit (Prana 150, fw 49; see the README's API notes): speed is written x10,
+office unit (Prana 150, fw 49; see the API notes in DOCUMENTATION.md): speed is written x10,
 brightness as 0/1/2/4/8/16/32, commands answer {"result":"ok"} even when ignored
 (malformed ones get 400), auto_plus and winter toggle whatever value says,
 boost=false and night=false are ignored, any speed change ends Auto/Auto+/Boost,
